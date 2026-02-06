@@ -578,7 +578,15 @@ class Trainer(torch.distributed.checkpoint.stateful.Stateful):
 
         # Process each microbatch: move to GPU, forward/backward, then free
         accumulated_losses = []
-        for input_dict, labels in microbatches:
+        is_hsdp = parallel_dims.dp_replicate_enabled
+        for micro_step, (input_dict, labels) in enumerate(microbatches):
+            # For HSDP, skip the all-reduce on all but the last microbatch
+            # to avoid redundant communication during gradient accumulation.
+            if is_hsdp:
+                is_last_step = micro_step == len(microbatches) - 1
+                for model in self.model_parts:
+                    model.set_requires_all_reduce(is_last_step)
+
             # Move tensors to GPU
             for k, v in input_dict.items():
                 if isinstance(v, torch.Tensor):
